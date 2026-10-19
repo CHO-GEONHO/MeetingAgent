@@ -280,7 +280,8 @@ def _parent_id(cf, cfg: Settings, d: date) -> str:
     return parent
 
 
-def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str) -> None:
+def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str, *,
+                  force: bool = False) -> None:
     if not cfg.get("confluence.enabled"):
         return
     cf = confluence_client(cfg)
@@ -303,7 +304,7 @@ def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str) 
             page_id, prev["title"], body,
             known_version=prev.get("version"),
             message=f"MeetingAgent 재생성 ({job.name})",
-            force=bool(job.state.get("force_upload")),
+            force=force,
         )
     else:
         if cf.find_page(title):  # 같은 날 같은 제목이면 시각을 붙인다 (스페이스 내 제목은 유일해야 함)
@@ -316,7 +317,6 @@ def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str) 
     version = (page.get("version") or {}).get("number") or cf.page_version(page["id"])
     job.state["page"] = {"id": page["id"], "title": page.get("title", title), "url": cf.url(page),
                          "version": version, "labels": labels}
-    job.state.pop("force_upload", None)
     job.mark("upload")
     log(f"업로드 완료: {job.state['page']['url']}")
 
@@ -342,9 +342,15 @@ def notify(cfg: Settings, title: str, message: str) -> None:
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
-def run(job: Job, cfg: Settings, *, upload: bool = True, notify_failure: bool = True) -> bool:
-    """전 단계 실행. 성공 True. 실패해도 예외를 삼키고 state에 기록 → `meet retry`."""
+def run(job: Job, cfg: Settings, *, upload: bool = True, notify_failure: bool = True,
+        force_upload: bool = False) -> bool:
+    """전 단계 실행. 성공 True. 실패해도 예외를 삼키고 state에 기록 → `meet retry`.
+
+    `force_upload`는 이번 실행에만 적용하고 state.json에 남기지 않는다. 남겨두면 이번 시도가
+    실패했을 때(VPN 끊김 등) 나중의 자동 재시도가 그 사이 생긴 수정까지 확인 없이 덮는다.
+    """
     job.state.pop("error", None)
+    job.state.pop("force_upload", None)  # 예전 버전이 남긴 플래그는 무시하고 지운다
     try:
         _stage_convert(job, cfg)
         _stage_transcribe(job, cfg)
@@ -352,7 +358,7 @@ def run(job: Job, cfg: Settings, *, upload: bool = True, notify_failure: bool = 
         text = _write_transcript_txt(job)
         minutes = _stage_summarize(job, cfg, text)
         if upload:
-            _stage_upload(job, cfg, minutes, text)
+            _stage_upload(job, cfg, minutes, text, force=force_upload)
         job.state["status"] = "done" if job.done("upload") or not cfg.get("confluence.enabled") \
             else ("summarized" if job.done("summarize") else job.status)
         _cleanup(job, cfg)

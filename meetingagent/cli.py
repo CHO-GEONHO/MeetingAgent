@@ -152,12 +152,10 @@ def cmd_redo(args) -> int:
         job.state.setdefault("hints", {})["title"] = args.title
     if args.note:
         job.state.setdefault("hints", {})["note"] = args.note
-    if getattr(args, "force", False):
-        # 업로드 이후 사람이 고친 페이지를 덮어쓴다. 기본은 멈추는 쪽이다.
-        job.state["force_upload"] = True
     job.reset_from(args.from_stage)
     with pipeline.global_lock(cfg):
-        return 0 if pipeline.run(job, cfg) else 1
+        # --force: 업로드 이후 사람이 고친 페이지를 덮어쓴다. 이번 실행에만 적용된다.
+        return 0 if pipeline.run(job, cfg, force_upload=args.force) else 1
 
 
 def cmd_watch(args) -> int:
@@ -355,8 +353,13 @@ def cmd_doctor(args) -> int:
                 fixed = str(cfg.get("confluence.parent_id") or "").strip()
                 if fixed:
                     try:
-                        p = cf._req("GET", f"/content/{fixed}")
-                        check(f"상위 페이지 (ID {fixed}) '{p.get('title', '')}'", True)
+                        p = cf._req("GET", f"/content/{fixed}", params={"expand": "space"})
+                        # 다른 스페이스의 페이지 밑에는 만들 수 없다 (업로드 때 400)
+                        space = (p.get("space") or {}).get("key")
+                        want = cfg.get("confluence.space_key")
+                        check(f"상위 페이지 (ID {fixed}) '{p.get('title', '')}'",
+                              not space or space == want,
+                              f"{space} 스페이스의 페이지입니다. confluence.space_key({want})와 같은 스페이스여야 합니다")
                     except Exception as e:  # noqa: BLE001
                         check(f"상위 페이지 (ID {fixed})", False, f"ID 를 확인하세요 — {e}")
                 else:
