@@ -26,8 +26,32 @@ MINUTES_SCHEMA = {
                          "enum": ["정기회의", "기술논의", "장애회고", "1on1", "외부미팅", "기타"]},
         "project": _STR,
         "attendees": _STR_LIST,
+        # 회의 개요 표. 사용자가 시작할 때 입력한 값이 우선이고, 없으면 전사본에서 찾는다.
+        "subject": _STR,
+        "location": _STR,
+        "started_at": _STR,
+        "attendee_groups": {
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {"org": _STR, "members": _STR_LIST},
+                      "required": ["org", "members"]},
+        },
+        "background": _STR,
+        "sequence": _STR_LIST,
         "summary": _STR,
-        "decisions": _STR_LIST,
+        "summary_detail": _STR_LIST,
+        "decisions": {
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {"text": _STR, "status": _STR},
+                      "required": ["text", "status"]},
+        },
+        "review_notes": {
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {"topic": _STR, "points": _STR_LIST},
+                      "required": ["topic", "points"]},
+        },
         "action_items": {
             "type": "array",
             "items": {
@@ -53,9 +77,11 @@ MINUTES_SCHEMA = {
         },
         "labels": _STR_LIST,
     },
-    "required": ["title", "meeting_type", "project", "attendees", "summary", "decisions",
-                 "action_items", "discussion", "open_questions", "speaker_map",
-                 "corrections", "labels"],
+    "required": ["title", "meeting_type", "project", "attendees", "subject", "location",
+                 "started_at", "attendee_groups", "background", "sequence",
+                 "summary", "summary_detail", "decisions",
+                 "action_items", "discussion", "open_questions", "review_notes",
+                 "speaker_map", "corrections", "labels"],
 }
 
 WEEKDAYS = "월화수목금토일"
@@ -76,7 +102,9 @@ def build_input(*, meeting_date: date, duration_sec: float | None, hints: dict,
     if duration_sec:
         parts.append(f"- 녹음 길이: {max(1, round(duration_sec / 60))}분")
     labels = {"title": "사용자 지정 제목", "project": "프로젝트 힌트",
-              "meeting_type": "회의 유형 힌트", "attendees": "참석자 힌트", "note": "추가 메모"}
+              "meeting_type": "회의 유형 힌트", "attendees": "참석자 힌트",
+              "location": "회의 장소(확정값)", "started_at": "회의 시작 시각(확정값)",
+              "note": "추가 메모"}
     for key, label in labels.items():
         if hints.get(key):
             val = hints[key]
@@ -136,15 +164,39 @@ def normalize(data: dict) -> dict:
         "meeting_type": data.get("meeting_type") or "기타",
         "project": str(data.get("project") or "").strip(),
         "attendees": [str(a).strip() for a in data.get("attendees") or [] if str(a).strip()],
+        "subject": str(data.get("subject") or "").strip(),
+        "location": str(data.get("location") or "").strip(),
+        "started_at": str(data.get("started_at") or "").strip(),
+        "attendee_groups": [],
+        "background": str(data.get("background") or "").strip(),
+        "sequence": [str(s).strip() for s in data.get("sequence") or [] if str(s).strip()],
         "summary": str(data.get("summary") or "").strip(),
-        "decisions": [str(d).strip() for d in data.get("decisions") or [] if str(d).strip()],
+        "summary_detail": [str(s).strip() for s in data.get("summary_detail") or [] if str(s).strip()],
+        "decisions": [],
         "action_items": [],
         "discussion": [],
         "open_questions": [str(q).strip() for q in data.get("open_questions") or [] if str(q).strip()],
+        "review_notes": [],
         "speaker_map": {str(k): str(v) for k, v in (data.get("speaker_map") or {}).items()},
         "corrections": [c for c in data.get("corrections") or [] if c.get("from") and c.get("to")],
         "labels": [],
     }
+    for g in data.get("attendee_groups") or []:
+        members = [str(m).strip() for m in g.get("members") or [] if str(m).strip()]
+        if members:
+            out["attendee_groups"].append({"org": str(g.get("org") or "").strip(), "members": members})
+    # decisions 는 예전엔 문자열 배열이었다. 옛 minutes.json 을 redo 할 때를 위해 둘 다 받는다.
+    for d in data.get("decisions") or []:
+        if isinstance(d, str):
+            text, status = d.strip(), ""
+        else:
+            text, status = str(d.get("text") or "").strip(), str(d.get("status") or "").strip()
+        if text:
+            out["decisions"].append({"text": text, "status": status or "합의"})
+    for n in data.get("review_notes") or []:
+        points = [str(p).strip() for p in n.get("points") or [] if str(p).strip()]
+        if points:
+            out["review_notes"].append({"topic": str(n.get("topic") or "").strip(), "points": points})
     for a in data.get("action_items") or []:
         if str(a.get("task") or "").strip():
             out["action_items"].append({k: str(a.get(k) or "").strip()

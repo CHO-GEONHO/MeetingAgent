@@ -154,7 +154,7 @@ def index_page_body(space_key: str, label: str = "meeting") -> str:
         "<h2>회의록 목록</h2>"
         '<ac:structured-macro ac:name="detailssummary" ac:schema-version="2">'
         '<ac:parameter ac:name="id">meeting</ac:parameter>'
-        '<ac:parameter ac:name="headings">날짜,유형,프로젝트,참석자,Action Items</ac:parameter>'
+        '<ac:parameter ac:name="headings">주제,날짜,장소,유형,프로젝트,참석자,Action Items</ac:parameter>'
         '<ac:parameter ac:name="sortBy">날짜</ac:parameter>'
         '<ac:parameter ac:name="reverseSort">true</ac:parameter>'
         '<ac:parameter ac:name="pageSize">50</ac:parameter>'

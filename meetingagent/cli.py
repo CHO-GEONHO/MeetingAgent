@@ -37,11 +37,14 @@ def _add_hint_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("-t", "--title", help="회의 제목 (없으면 Claude가 생성)")
     p.add_argument("-p", "--project", help="프로젝트 힌트")
     p.add_argument("-a", "--attendees", help="참석자, 쉼표 구분")
+    p.add_argument("-l", "--location", help="회의 장소 (예: 본사 9층 회의실)")
+    p.add_argument("--time", dest="started_at", help="회의 시작 시각 (예: 14:00)")
     p.add_argument("--type", dest="meeting_type", help="정기회의|기술논의|장애회고|1on1|외부미팅")
     p.add_argument("-n", "--speakers", type=int, help="화자 수 (화자 분리 정확도 향상)")
     p.add_argument("--note", help="Claude에게 줄 추가 메모 (예: '보안 이슈 위주로')")
     p.add_argument("--date", help="회의 일시 덮어쓰기 'YYYY-MM-DD HH:MM'")
     p.add_argument("--no-upload", action="store_true", help="Confluence 업로드 생략 (로컬 md만)")
+    p.add_argument("-y", "--yes", action="store_true", help="시작 질문 없이 바로 진행")
 
 
 def _hints(args) -> dict:
@@ -49,10 +52,34 @@ def _hints(args) -> dict:
         "title": args.title,
         "project": args.project,
         "attendees": [a.strip() for a in args.attendees.split(",")] if args.attendees else None,
+        "location": getattr(args, "location", None),
+        "started_at": getattr(args, "started_at", None),
         "meeting_type": args.meeting_type,
         "speakers": args.speakers,
         "note": args.note,
     }
+
+
+def _prompt_meeting_info(args) -> None:
+    """시작할 때 회의 개요에 들어갈 값을 묻는다 (제목·참석자·장소·시작 시각).
+
+    - 자동 감시(launchd)처럼 **터미널이 없으면 묻지 않는다.** 물으면 데몬이 거기서 멈춘다.
+    - 플래그로 이미 준 값은 다시 묻지 않는다. `-y` 로 전부 건너뛸 수 있다.
+    - 빈칸으로 두면 Claude 가 전사본에서 추정한다. 틀리게 지어내는 것보다 낫도록
+      SKILL.md 가 "확인 안 되면 비워 둔다" 로 지시한다.
+    """
+    if getattr(args, "yes", False) or not sys.stdin.isatty():
+        return
+    print("\n회의 정보 — Enter 로 건너뛰면 전사본에서 추정합니다")
+    if not args.title:
+        args.title = _ask("회의 제목") or None
+    if not args.attendees:
+        args.attendees = _ask("참석자 (쉼표 구분)") or None
+    if not args.location:
+        args.location = _ask("회의 장소") or None
+    if not args.started_at:
+        args.started_at = _ask("회의 시작 시각", datetime.now().strftime("%H:%M")) or None
+    print()
 
 
 def _meeting_dt(args) -> datetime | None:
@@ -72,6 +99,7 @@ def _require_setup() -> config.Settings:
 
 def cmd_process(args) -> int:
     cfg = _require_setup()
+    _prompt_meeting_info(args)
     ok = True
     with pipeline.global_lock(cfg):
         for f in args.files:
@@ -92,6 +120,9 @@ def cmd_rec(args) -> int:
     if args.list_devices:
         print(audio.list_devices())
         return 0
+    # 녹음 전에 묻는다 — 끝난 뒤에 물으면 회의 끝나고 자리를 뜬 상태에서 멈춰 있게 된다.
+    _prompt_meeting_info(args)
+    args.yes = True  # cmd_process 에서 다시 묻지 않게
     rec_dir = cfg.workdir / "recordings"
     rec_dir.mkdir(parents=True, exist_ok=True)
     dst = rec_dir / f"{datetime.now():%Y-%m-%d_%H%M}.m4a"
@@ -148,10 +179,13 @@ def cmd_redo(args) -> int:
     if args.from_stage in ("transcribe", "convert") and not (job.source and job.source.exists()):
         print("원본 음성이 이미 삭제되어 재전사할 수 없습니다. --from summarize 는 가능합니다.")
         return 1
-    if args.title:
-        job.state.setdefault("hints", {})["title"] = args.title
-    if args.note:
-        job.state.setdefault("hints", {})["note"] = args.note
+    for key in ("title", "note", "location", "started_at"):
+        val = getattr(args, key, None)
+        if val:
+            job.state.setdefault("hints", {})[key] = val
+    if getattr(args, "attendees", None):
+        job.state.setdefault("hints", {})["attendees"] = [
+            a.strip() for a in args.attendees.split(",") if a.strip()]
     job.reset_from(args.from_stage)
     with pipeline.global_lock(cfg):
         # --force: 업로드 이후 사람이 고친 페이지를 덮어쓴다. 이번 실행에만 적용된다.
@@ -421,6 +455,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--from", dest="from_stage", default="summarize",
                    choices=["convert", "transcribe", "diarize", "summarize", "upload"])
     p.add_argument("-t", "--title")
+    p.add_argument("-a", "--attendees", help="참석자, 쉼표 구분")
+    p.add_argument("-l", "--location", help="회의 장소")
+    p.add_argument("--time", dest="started_at", help="회의 시작 시각 (예: 14:00)")
     p.add_argument("--note")
     p.add_argument("--force", action="store_true",
                    help="업로드 이후 사람이 고친 Confluence 페이지도 덮어쓴다")

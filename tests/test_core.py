@@ -127,6 +127,74 @@ class TestRender(unittest.TestCase):
         self.assertIsNone(render.find_person("", PEOPLE))
 
 
+class TestTemplateLayout(unittest.TestCase):
+    """사내 회의록 템플릿(wiki pageId=329155833) 골격을 고정한다."""
+
+    def _headings(self, m):
+        import re
+        xml = render.Renderer(PEOPLE).storage(m, meeting_date=date(2026, 9, 23),
+                                              duration_sec=None, transcript_lines=None)
+        return re.findall(r"<h2>([^<]+)</h2>", xml), xml
+
+    def test_sections_are_numbered_in_template_order(self):
+        m = minutes(
+            location="KCB 사옥 12층", started_at="10:00",
+            background="1차 협의 후속", sequence=["설명", "질의응답"],
+            discussion=[{"topic": "기능 설명", "points": ["a"]}, {"topic": "인프라", "points": ["b"]}],
+            open_questions=["부하 기준"],
+            review_notes=[{"topic": "현장 수정", "points": ["왕복 소요가 관건"]}],
+        )
+        heads, xml = self._headings(m)
+        self.assertEqual(heads, [
+            "1. 회의 개요",
+            "2. 안건 1 — 기능 설명",
+            "3. 안건 2 — 인프라",
+            "4. 결정·합의 사항",
+            "5. Action Items",
+            "6. 미결 / 다음에 다룰 것",
+            "7. 담당자 검토 의견 및 후속 논의 안건",
+        ])
+        self.assertIn("<h3>1.1 배경</h3>", xml)
+        self.assertIn("<h3>1.2 진행 순서</h3>", xml)
+        self.assertIn("KCB 사옥 12층", xml)
+        self.assertIn("10:00", xml)
+
+    def test_empty_sections_are_omitted(self):
+        """근거가 없으면 절이 통째로 빠져야 한다. 빈 절을 채우려는 유혹을 막는 장치다."""
+        heads, xml = self._headings(minutes(open_questions=[], review_notes=[],
+                                            background="", sequence=[]))
+        self.assertEqual(heads, ["1. 회의 개요", "2. 안건 1 — 일정",
+                                 "3. 결정·합의 사항", "4. Action Items"])
+        self.assertNotIn("배경", xml)
+        self.assertNotIn("진행 순서", xml)
+
+    def test_attendee_groups_render_per_org(self):
+        m = minutes(attendee_groups=[{"org": "KCB", "members": ["신민준"]},
+                                     {"org": "AISpera", "members": ["홍길동"]}])
+        _, xml = self._headings(m)
+        self.assertIn("<th>참석 (KCB)</th>", xml)
+        self.assertIn("<th>참석 (AISpera)</th>", xml)
+        # Page Properties Report 가 읽는 '참석자' 행은 합쳐서 그대로 남아야 한다
+        self.assertIn("<th>참석자</th>", xml)
+
+    def test_decisions_accept_old_string_form(self):
+        """예전 minutes.json(문자열 배열)을 redo 해도 깨지지 않는다."""
+        d = summarize.normalize({"decisions": ["옛 형식"]})["decisions"]
+        self.assertEqual(d, [{"text": "옛 형식", "status": "합의"}])
+
+    def test_decision_status_shown(self):
+        m = minutes(decisions=[{"text": "범위 전환", "status": "확정 대기"}])
+        _, xml = self._headings(m)
+        self.assertIn("[확정 대기]", xml)
+
+    def test_markdown_mirrors_storage_sections(self):
+        m = minutes(location="본사 9층", started_at="14:00")
+        md = render.markdown(m, meeting_date=date(2026, 9, 23), duration_sec=None)
+        for s in ("## 1. 회의 개요", "| 장소 | 본사 9층 |", "| 일시 | 2026-09-23 14:00 |",
+                  "## 3. 결정·합의 사항", "## 4. Action Items"):
+            self.assertIn(s, md)
+
+
 class TestSetup(unittest.TestCase):
     def test_set_yaml_value_is_section_scoped(self):
         from pathlib import Path
