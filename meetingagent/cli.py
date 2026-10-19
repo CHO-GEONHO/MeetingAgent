@@ -30,7 +30,7 @@ meet — 회의 녹음 → 로컬 전사 → Claude 회의록 → Confluence
 공통 옵션: -t 제목  -p 프로젝트  -a "참석자1,참석자2"  --type 장애회고  -n 화자수  --no-upload
 """
 
-STATUS_ICON = {"done": "✅", "summarized": "📝", "failed": "❌", "new": "⏳"}
+STATUS_ICON = {"done": "✅", "summarized": "📝", "failed": "❌", "new": "⏳", "conflict": "⚠️"}
 
 
 def _add_hint_args(p: argparse.ArgumentParser) -> None:
@@ -152,6 +152,9 @@ def cmd_redo(args) -> int:
         job.state.setdefault("hints", {})["title"] = args.title
     if args.note:
         job.state.setdefault("hints", {})["note"] = args.note
+    if getattr(args, "force", False):
+        # 업로드 이후 사람이 고친 페이지를 덮어쓴다. 기본은 멈추는 쪽이다.
+        job.state["force_upload"] = True
     job.reset_from(args.from_stage)
     with pipeline.global_lock(cfg):
         return 0 if pipeline.run(job, cfg) else 1
@@ -349,8 +352,16 @@ def cmd_doctor(args) -> int:
                 cf = pipeline.confluence_client(cfg)
                 cf.ping()
                 check(f"Confluence 연결 ({cfg.get('confluence.base_url')})", True)
-                check(f"상위 페이지 '{cfg.get('confluence.parent_title')}'",
-                      bool(cf.find_page(cfg.get("confluence.parent_title"))), "meet confluence-init")
+                fixed = str(cfg.get("confluence.parent_id") or "").strip()
+                if fixed:
+                    try:
+                        p = cf._req("GET", f"/content/{fixed}")
+                        check(f"상위 페이지 (ID {fixed}) '{p.get('title', '')}'", True)
+                    except Exception as e:  # noqa: BLE001
+                        check(f"상위 페이지 (ID {fixed})", False, f"ID 를 확인하세요 — {e}")
+                else:
+                    check(f"상위 페이지 '{cfg.get('confluence.parent_title')}'",
+                          bool(cf.find_page(cfg.get("confluence.parent_title"))), "meet confluence-init")
             except Exception as e:  # noqa: BLE001
                 check("Confluence 연결", False, str(e))
     else:
@@ -408,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
                    choices=["convert", "transcribe", "diarize", "summarize", "upload"])
     p.add_argument("-t", "--title")
     p.add_argument("--note")
+    p.add_argument("--force", action="store_true",
+                   help="업로드 이후 사람이 고친 Confluence 페이지도 덮어쓴다")
     p.set_defaults(func=cmd_redo)
 
     p = sub.add_parser("watch")

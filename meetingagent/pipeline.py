@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import audio, keychain, render, summarize, transcribe
 from .config import Settings
+from .confluence import ConfluenceConflict
 
 STAGES = ["convert", "transcribe", "diarize", "summarize", "upload"]
 
@@ -260,6 +261,12 @@ def confluence_client(cfg: Settings):
 def _parent_id(cf, cfg: Settings, d: date) -> str:
     from .confluence import CHILDREN_BODY
 
+    # 상위 페이지를 ID 로 고정한 경우. 제목이 바뀌어도 따라가고, 연/월 묶음도 만들지 않는다 —
+    # 회의록이 전부 그 페이지 바로 밑에 `[날짜] 제목` 으로 쌓인다.
+    fixed = str(cfg.get("confluence.parent_id") or "").strip()
+    if fixed:
+        return fixed
+
     root_title = cfg.get("confluence.parent_title")
     root = cf.find_page(root_title)
     if not root:
@@ -267,9 +274,9 @@ def _parent_id(cf, cfg: Settings, d: date) -> str:
     parent = root["id"]
     hierarchy = cfg.get("confluence.hierarchy")
     if hierarchy in ("year", "year_month"):
-        parent = cf.ensure_page(f"{root_title} {d:%Y}", CHILDREN_BODY, parent)["id"]
+        parent = cf.get_or_create_page(f"{root_title} {d:%Y}", CHILDREN_BODY, parent)["id"]
     if hierarchy == "year_month":
-        parent = cf.ensure_page(f"{root_title} {d:%Y-%m}", CHILDREN_BODY, parent)["id"]
+        parent = cf.get_or_create_page(f"{root_title} {d:%Y-%m}", CHILDREN_BODY, parent)["id"]
     return parent
 
 
@@ -286,18 +293,30 @@ def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str) 
     job.f("page.xml").write_text(body, encoding="utf-8")
 
     title = f"[{job.meeting_date.isoformat()}] {minutes['title']}"
-    page_id = (job.state.get("page") or {}).get("id")
+    prev = job.state.get("page") or {}
+    page_id = prev.get("id")
     if page_id:
         log("Confluence 페이지 갱신")
-        page = cf.update_page(page_id, job.state["page"]["title"], body)
+        # known_version 을 넘겨 사람이 고친 본문을 말없이 덮지 않게 한다.
+        # 충돌하면 ConfluenceConflict 가 올라오고, --force 로만 넘어간다.
+        page = cf.update_page(
+            page_id, prev["title"], body,
+            known_version=prev.get("version"),
+            message=f"MeetingAgent 재생성 ({job.name})",
+            force=bool(job.state.get("force_upload")),
+        )
     else:
         if cf.find_page(title):  # 같은 날 같은 제목이면 시각을 붙인다 (스페이스 내 제목은 유일해야 함)
             title = f"{title} ({job.state.get('meeting_time', '')})"
         log(f"Confluence 업로드: {title}")
         page = cf.create_page(title, body, _parent_id(cf, cfg, job.meeting_date))
     labels = list(dict.fromkeys(list(cfg.get("confluence.labels") or []) + minutes["labels"]))
-    cf.add_labels(page["id"], labels)
-    job.state["page"] = {"id": page["id"], "title": page.get("title", title), "url": cf.url(page)}
+    labels = cf.sync_labels(page["id"], labels, prev.get("labels"))
+    # 버전을 꼭 남긴다 — 비면 다음 갱신에서 충돌 검사가 조용히 꺼진다.
+    version = (page.get("version") or {}).get("number") or cf.page_version(page["id"])
+    job.state["page"] = {"id": page["id"], "title": page.get("title", title), "url": cf.url(page),
+                         "version": version, "labels": labels}
+    job.state.pop("force_upload", None)
     job.mark("upload")
     log(f"업로드 완료: {job.state['page']['url']}")
 
@@ -338,6 +357,16 @@ def run(job: Job, cfg: Settings, *, upload: bool = True, notify_failure: bool = 
             else ("summarized" if job.done("summarize") else job.status)
         _cleanup(job, cfg)
         job.save()
+    except ConfluenceConflict as e:
+        # 재시도로 풀리는 문제가 아니다. 사람이 페이지를 보고 판단해야 한다.
+        # status 를 conflict 로 두어 `meet retry` 가 매번 다시 부딪히지 않게 한다.
+        job.state["status"] = "conflict"
+        job.state["error"] = str(e)
+        job.save()
+        log(f"업로드 중단\n{e}")
+        if notify_failure:
+            notify(cfg, "MeetingAgent 업로드 중단", f"{job.name}: 페이지가 그 사이 수정됨")
+        return False
     except Exception as e:  # noqa: BLE001 - 파이프라인 경계
         job.state["status"] = "failed"
         job.state["error"] = f"{e.__class__.__name__}: {e}"
@@ -359,4 +388,5 @@ def run(job: Job, cfg: Settings, *, upload: bool = True, notify_failure: bool = 
 
 
 def pending(cfg: Settings) -> list[Job]:
-    return [j for j in list_jobs(cfg) if j.status != "done"]
+    # conflict 는 자동 재시도 대상이 아니다 — `meet redo <작업> --from upload [--force]` 로 사람이 푼다.
+    return [j for j in list_jobs(cfg) if j.status not in ("done", "conflict")]

@@ -11,6 +11,10 @@ class ConfluenceError(RuntimeError):
     pass
 
 
+class ConfluenceConflict(ConfluenceError):
+    """업로드 이후 누가 페이지를 고쳤다. 덮어쓰지 않고 멈춘다."""
+
+
 class Confluence:
     def __init__(self, base_url: str, token: str, space_key: str, verify_ssl: bool | str = True,
                  userkey_cache: Path | None = None):
@@ -37,7 +41,13 @@ class Confluence:
             raise ConfluenceError("인증 실패(401). PAT를 다시 등록하세요: meet setup --token")
         if r.status_code >= 400:
             raise ConfluenceError(f"{method} {path} → {r.status_code}: {r.text[:400]}")
-        return r.json() if r.content else {}
+        if not r.content:
+            return {}
+        try:
+            return r.json()
+        except ValueError:
+            # 사내망 밖에서 캡티브 포털/프록시가 200 에 HTML 을 끼워 넣는 경우가 있다.
+            raise ConfluenceError(f"{method} {path} → JSON 이 아닌 응답: {r.text[:200]}")
 
     # --- 조회 ---
     def ping(self) -> dict:
@@ -74,19 +84,64 @@ class Confluence:
             payload["ancestors"] = [{"id": parent_id}]
         return self._req("POST", "/content", data=json.dumps(payload))
 
-    def update_page(self, page_id: str, title: str, body: str) -> dict:
+    def update_page(self, page_id: str, title: str, body: str, *,
+                    known_version: int | None = None, message: str = "",
+                    minor: bool = True, force: bool = False) -> dict:
+        """페이지 본문을 교체한다.
+
+        `known_version` 을 주면 **우리가 마지막으로 올린 버전과 같을 때만** 덮어쓴다.
+        회의록은 사람이 직접 고치는 것을 전제로 하므로(README "오류는 직접 수정해 주세요"),
+        그 사이 수정이 있었으면 ConfluenceConflict 로 멈춘다. 말없이 덮으면 수정이 사라진다.
+
+        `minor=True` 가 기본이다 — 자동 재업로드가 지켜보는 사람에게 알림을 보내지 않게 한다.
+        """
         current = self._req("GET", f"/content/{page_id}", params={"expand": "version"})
-        payload = {"id": page_id, "type": "page", "title": title,
-                   "version": {"number": current["version"]["number"] + 1},
+        cur_ver = current["version"]["number"]
+        if known_version is not None and not force and cur_ver != known_version:
+            who = (current["version"].get("by") or {}).get("displayName") or "누군가"
+            raise ConfluenceConflict(
+                f"업로드 이후 페이지가 수정되었습니다 (v{known_version} → v{cur_ver}, 수정: {who}).\n"
+                f"  덮어쓰지 않았습니다. 먼저 내용을 확인하세요:\n"
+                f"    {self.url(current)}\n"
+                f"  확인 후 그래도 이쪽으로 덮어쓰려면: meet redo <작업> --from upload --force"
+            )
+        version: dict = {"number": cur_ver + 1, "minorEdit": minor}
+        if message:
+            version["message"] = message
+        payload = {"id": page_id, "type": "page", "title": title, "version": version,
                    "body": {"storage": {"value": body, "representation": "storage"}}}
         return self._req("PUT", f"/content/{page_id}", data=json.dumps(payload))
 
-    def add_labels(self, page_id: str, labels: list[str]) -> None:
-        if labels:
-            self._req("POST", f"/content/{page_id}/label",
-                      data=json.dumps([{"prefix": "global", "name": l} for l in labels]))
+    def page_version(self, page_id: str) -> int:
+        return self._req("GET", f"/content/{page_id}", params={"expand": "version"})["version"]["number"]
 
-    def ensure_page(self, title: str, body: str, parent_id: str | None) -> dict:
+    def labels(self, page_id: str) -> list[str]:
+        res = self._req("GET", f"/content/{page_id}/label")
+        return [l["name"] for l in res.get("results") or []]
+
+    def sync_labels(self, page_id: str, want: list[str], previously_set: list[str] | None = None) -> list[str]:
+        """라벨을 맞춘다. 돌려주는 값은 '이번에 우리가 설정한 라벨' 목록이다.
+
+        `previously_set` 은 지난 업로드에서 우리가 붙인 라벨이다. 거기서 빠진 것만 지운다 —
+        사람이 손으로 붙인 라벨은 건드리지 않는다. (프로젝트가 바뀌면 옛 proj-* 가 남아
+        상위 페이지의 목록 표에서 엉뚱하게 묶이는 것을 막는다.)
+        """
+        want = list(dict.fromkeys(l for l in want if l))
+        have = self.labels(page_id)
+        for name in [l for l in (previously_set or []) if l not in want and l in have]:
+            self._req("DELETE", f"/content/{page_id}/label", params={"name": name})
+        add = [l for l in want if l not in have]
+        if add:
+            self._req("POST", f"/content/{page_id}/label",
+                      data=json.dumps([{"prefix": "global", "name": l} for l in add]))
+        return want
+
+    def get_or_create_page(self, title: str, body: str, parent_id: str | None) -> dict:
+        """제목이 같은 페이지가 있으면 **본문은 그대로 두고** 그것을 쓴다.
+
+        연/월 묶음 페이지처럼 한 번 만들고 마는 용도다. 본문을 갱신하지 않는다는 뜻으로
+        이름을 ensure_page 에서 바꿨다 — 예전 이름은 템플릿이 반영되는 것처럼 읽혔다.
+        """
         return self.find_page(title) or self.create_page(title, body, parent_id)
 
 
