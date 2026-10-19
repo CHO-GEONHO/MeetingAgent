@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": False,
         "base_url": "",
         "space_key": "",
+        "parent_id": "",          # 고정 상위 페이지 ID. 넣으면 parent_title·hierarchy 를 무시한다
         "parent_title": "회의록",
         "hierarchy": "year_month",
         "labels": ["meeting"],

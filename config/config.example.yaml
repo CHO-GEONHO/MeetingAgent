@@ -30,7 +30,11 @@ confluence:
   enabled: true
   base_url: https://confluence.example.com   # Data Center 주소 (VPN)
   space_key: SPACE
-  parent_title: 회의록           # 상위 페이지. 없으면 `meet confluence-init`으로 생성
+  # 상위 페이지를 ID로 고정하는 방법 (권장). 페이지 URL의 pageId 값을 넣으세요.
+  # 넣으면 아래 parent_title·hierarchy를 무시하고, 모든 회의록이 이 페이지 바로 밑에
+  # `[2026-10-19] 회의 제목` 형태로 쌓입니다. 상위 페이지 제목이 바뀌어도 따라갑니다.
+  parent_id: ""                  # 예: "329166233"
+  parent_title: 회의록           # parent_id가 비었을 때만 씀. 없으면 `meet confluence-init`으로 생성
   hierarchy: year_month          # none | year | year_month  (회의록 2026 / 회의록 2026-10 하위에 생성)
   labels: [meeting]              # 모든 회의록에 붙는 공통 라벨
   attach_transcript: true        # 페이지 하단에 원문 전사본(Expand) 첨부

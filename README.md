@@ -52,6 +52,7 @@ meet list                         # 최근 회의와 상태 (✅ 완료 📝 업
 meet open                         # 최근 회의록 페이지 열기  (meet open -f: 작업 폴더)
 meet retry                        # 실패/미업로드 건 이어서 처리
 meet redo 2026-10-19 --from summarize   # 용어집 고친 뒤 회의록만 다시 생성 (같은 페이지 갱신)
+meet redo 2026-10-19 --from upload --force   # 사람이 고친 페이지를 덮어쓸 때만
 meet doctor                       # 환경 점검
 meet watch on|off|status|log
 ```
@@ -95,6 +96,31 @@ people:
 - 프로젝트별로 모아보려면 라벨 `proj-*`를 쓰세요. CQL 예시는 `label = "proj-sbom"`이에요.
 - 계층은 `config.yaml`의 `confluence.hierarchy`(`none` | `year` | `year_month`)로 바꿀 수 있어요.
 
+**상위 페이지를 하나로 고정하고 싶다면** `confluence.parent_id`에 그 페이지의 `pageId`를 넣으세요.
+연/월 묶음 없이 전부 그 페이지 바로 밑에 `[2026-10-19] 회의 제목`으로 쌓이고, 상위 페이지 제목이
+바뀌어도 따라갑니다. (`parent_title`과 `hierarchy`는 무시됩니다.)
+
+```yaml
+confluence:
+  parent_id: "329166233"
+```
+
+### 사람이 고친 회의록은 덮어쓰지 않습니다
+
+업로드한 뒤 페이지를 직접 고쳤다면, `meet redo … --from upload`는 **멈추고 알려줍니다.**
+회의록은 고쳐 쓰라고 만든 문서라 자동 재생성이 사람 수정을 지우면 안 되기 때문이에요.
+
+```
+업로드 중단
+업로드 이후 페이지가 수정되었습니다 (v3 → v5, 수정: 홍길동).
+  덮어쓰지 않았습니다. 먼저 내용을 확인하세요:
+    https://wiki.example.com/pages/viewpage.action?pageId=12345
+  확인 후 그래도 이쪽으로 덮어쓰려면: meet redo <작업> --from upload --force
+```
+
+이 상태는 `meet list`에 ⚠️로 보이고, `meet retry`가 자동으로 다시 시도하지 않습니다.
+라벨도 **MeetingAgent가 붙였던 것만** 정리하고, 사람이 손으로 단 라벨은 건드리지 않아요.
+
 ## 화자 분리 (선택)
 
 ```bash
@@ -124,6 +150,8 @@ meet setup                   # HF 토큰 입력 (모델 페이지에서 약관 �
 |---|---|
 | `Confluence 접속 실패` | VPN을 켜고 `meet retry` |
 | `인증 실패(401)` | `meet setup --token` |
+| `업로드 이후 페이지가 수정되었습니다` | 페이지를 열어 확인 후, 덮어써도 되면 `meet redo <작업> --from upload --force` |
+| `상위 페이지 … ID 를 확인하세요` | `confluence.parent_id`의 pageId가 맞는지 확인 (`meet doctor`) |
 | 녹음 파일이 비어 있음 | 시스템 설정 > 개인정보 보호 > 마이크에서 터미널 허용 |
 | 같은 문장이 반복 전사됨 | Whisper 환각이에요. 기본으로 반복을 필터링하고, 계속되면 `whisper.condition_on_previous_text: false`인지 확인 |
 | 감시가 동작 안 함 | `meet watch log`, `meet doctor` |
