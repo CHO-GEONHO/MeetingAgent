@@ -1,0 +1,20 @@
+[project]
+name = "meetingagent"
+version = "0.1.0"
+description = "회의 녹음 → 로컬 전사(mlx-whisper) → Claude 회의록 → Confluence 업로드 자동화"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx-whisper>=0.4.2",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# 화자 분리. torch 포함이라 용량이 커서 선택 설치 (./install.sh --with-diarization)
+diarize = [
+    "pyannote.audio>=3.3",
+]
+
+[tool.uv]
+package = false

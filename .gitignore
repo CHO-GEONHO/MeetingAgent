@@ -1,0 +1,15 @@
+# 개인/사내 설정 (example 파일만 커밋)
+config/*.yaml
+!config/*.example.yaml
+
+# 환경
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 혹시 레포 안에 데이터를 둘 경우
+data/
+*.m4a
+*.wav
+*.mp3

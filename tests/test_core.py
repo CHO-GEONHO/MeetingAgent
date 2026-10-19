@@ -1,0 +1,150 @@
+import json
+import unittest
+from datetime import date
+
+from meetingagent import diarize, render, summarize, transcribe
+
+PEOPLE = [{"name": "홍길동", "aliases": ["길동님"], "username": "gdhong"},
+          {"name": "김철수", "aliases": ["철수"]}]
+
+
+def minutes(**over):
+    base = summarize.normalize({
+        "title": "AKS 업그레이드", "meeting_type": "기술논의", "project": "AKS",
+        "attendees": ["홍길동", "김철수"], "summary": "1.30으로 올리기로 함 <확정>",
+        "decisions": ["다음 주 화요일에 스테이징부터 진행하기로 함"],
+        "action_items": [
+            {"owner": "길동님", "task": "노드풀 & 애드온 호환성 확인", "due": "2026-10-23", "evidence": "00:03:10"},
+            {"owner": "", "task": "공지 작성", "due": "다음주", "evidence": ""},
+        ],
+        "discussion": [{"topic": "일정", "points": ["업무 시간 외 진행"]}],
+        "open_questions": [], "speaker_map": {"화자A": "홍길동(추정)"},
+        "corrections": [{"from": "에이케이에스", "to": "AKS"}], "labels": ["proj-aks-upgrade", "쿠버", "K8s Ops"],
+    })
+    base.update(over)
+    return base
+
+
+class TestTranscribe(unittest.TestCase):
+    def test_clean_removes_hallucinations_and_loops(self):
+        segs = [{"start": i, "end": i + 1, "text": t} for i, t in enumerate(
+            ["안녕하세요", "시청해주셔서 감사합니다.", "네", "네", "네", "네", "다음 안건"])]
+        texts = [s["text"] for s in transcribe.clean_segments(segs)]
+        self.assertEqual(texts, ["안녕하세요", "네", "네", "다음 안건"])
+
+    def test_initial_prompt_is_bounded(self):
+        glossary = [{"term": f"TERM{i}"} for i in range(200)]
+        p = transcribe.build_initial_prompt(glossary, PEOPLE, max_chars=120)
+        self.assertLessEqual(len(p), 125)
+        self.assertIn("TERM0", p)
+
+    def test_format_groups_same_speaker(self):
+        segs = [{"start": 0, "end": 2, "text": "a", "speaker": "화자A"},
+                {"start": 2, "end": 4, "text": "b", "speaker": "화자A"},
+                {"start": 3725, "end": 3726, "text": "c", "speaker": "화자B"}]
+        self.assertEqual(transcribe.format_transcript(segs),
+                         "[00:00:00] 화자A: a b\n[01:02:05] 화자B: c\n")
+
+    def test_format_splits_without_speaker_and_long_turns(self):
+        no_spk = [{"start": 0, "end": 1, "text": "a"}, {"start": 1, "end": 2, "text": "b"}]
+        self.assertEqual(transcribe.format_transcript(no_spk), "[00:00:00] a\n[00:00:01] b\n")
+        long = [{"start": t, "end": t + 1, "text": str(t), "speaker": "화자A"} for t in (0, 30, 60)]
+        self.assertEqual(transcribe.format_transcript(long).count("\n"), 2)
+
+
+class TestDiarize(unittest.TestCase):
+    def test_assign_by_overlap_and_nearest(self):
+        turns = [{"start": 0, "end": 5, "speaker": "S1"}, {"start": 5, "end": 10, "speaker": "S2"}]
+        segs = [{"start": 1, "end": 6, "text": "x"}, {"start": 6, "end": 9, "text": "y"},
+                {"start": 12, "end": 13, "text": "z"}]
+        out = diarize.relabel(diarize.assign_speakers(segs, turns))
+        self.assertEqual([s["speaker"] for s in out], ["화자A", "화자B", "화자B"])
+
+
+class TestSummarize(unittest.TestCase):
+    def test_parse_structured_output(self):
+        env = {"type": "result", "is_error": False, "result": "",
+               "structured_output": {"title": "t", "action_items": [{"task": "do"}]}}
+        m = summarize.parse_claude_output(json.dumps(env))
+        self.assertEqual(m["action_items"], [{"owner": "", "task": "do", "due": "", "evidence": ""}])
+        self.assertEqual(m["meeting_type"], "기타")
+
+    def test_parse_fenced_result_fallback(self):
+        env = {"is_error": False, "result": '```json\n{"title": "x"}\n```'}
+        self.assertEqual(summarize.parse_claude_output(json.dumps(env))["title"], "x")
+
+    def test_labels_sanitized(self):
+        self.assertEqual(minutes()["labels"], ["proj-aks-upgrade", "k8s-ops"])
+
+    def test_skill_prompt_strips_frontmatter_and_interactive_section(self):
+        p = summarize.load_skill_prompt()
+        self.assertNotIn("name: meeting-minutes", p)
+        self.assertNotIn("대화형으로", p)
+        self.assertIn("지어내지 않는다", p)
+
+    def test_build_input(self):
+        text = summarize.build_input(meeting_date=date(2026, 10, 19), duration_sec=3600,
+                                     hints={"attendees": ["a", "b"]}, glossary=[{"term": "AKS", "variants": ["에이케이에스"]}],
+                                     people=PEOPLE, transcript="[00:00:00] hi")
+        self.assertIn("2026-10-19 (월)", text)
+        self.assertIn("참석자 힌트: a, b", text)
+        self.assertIn("AKS ← 에이케이에스", text)
+
+
+class TestRender(unittest.TestCase):
+    def test_storage_mentions_escaping_and_dates(self):
+        r = render.Renderer(PEOPLE, lambda u: "KEY-" + u if u == "gdhong" else None)
+        xml = r.storage(minutes(), meeting_date=date(2026, 10, 19), duration_sec=1800,
+                        transcript_lines=["[00:00:00] 화자A: <script>"], source_name="a.m4a")
+        self.assertIn('<ri:user ri:userkey="KEY-gdhong" />', xml)  # 별칭 → 멘션
+        self.assertIn("김철수", xml)                                  # username 없음 → 텍스트
+        self.assertIn('<time datetime="2026-10-23" />', xml)
+        self.assertIn("기한 미정", xml)                               # '다음주'는 날짜 아님
+        self.assertIn("담당 미정", xml)
+        self.assertIn("&lt;script&gt;", xml)
+        self.assertIn("노드풀 &amp; 애드온", xml)
+        self.assertNotIn("<script>", xml)
+        self.assertIn('ac:name="details"', xml)
+        self.assertIn('ac:name="expand"', xml)
+
+    def test_storage_is_well_formed(self):
+        import xml.dom.minidom
+
+        xml_body = render.Renderer(PEOPLE).storage(minutes(), meeting_date=date(2026, 10, 19),
+                                                   duration_sec=None, transcript_lines=None)
+        wrapped = ('<root xmlns:ac="http://atlassian.com/content" '
+                   'xmlns:ri="http://atlassian.com/resource/identifier">' + xml_body + "</root>")
+        xml.dom.minidom.parseString(wrapped)  # 파싱 실패 시 예외
+
+    def test_markdown(self):
+        md = render.markdown(minutes(), meeting_date=date(2026, 10, 19), duration_sec=None)
+        self.assertTrue(md.startswith("# [2026-10-19] AKS 업그레이드"))
+        self.assertIn("- [ ] **길동님** 노드풀 & 애드온 호환성 확인 (2026-10-23)", md)
+
+    def test_find_person_strips_honorifics(self):
+        self.assertEqual(render.find_person("홍길동(추정)", PEOPLE)["name"], "홍길동")
+        self.assertEqual(render.find_person("철수님", PEOPLE)["name"], "김철수")
+        self.assertIsNone(render.find_person("", PEOPLE))
+
+
+class TestSetup(unittest.TestCase):
+    def test_set_yaml_value_is_section_scoped(self):
+        from pathlib import Path
+
+        from meetingagent import cli
+        from meetingagent.config import REPO_ROOT, CONFIG_DIR
+
+        text = (REPO_ROOT / "config" / "config.example.yaml").read_text()
+        out = cli._set_yaml_value(text, "confluence", "enabled", "false")
+        out = cli._set_yaml_value(out, "confluence", "base_url", "https://wiki.corp")
+        out = cli._set_yaml_value(out, "diarization", "enabled", "true")
+        import yaml
+        d = yaml.safe_load(out)
+        self.assertFalse(d["confluence"]["enabled"])
+        self.assertTrue(d["diarization"]["enabled"])
+        self.assertEqual(d["confluence"]["base_url"], "https://wiki.corp")
+        self.assertIn("# Data Center 주소", out)  # 주석 보존
+
+
+if __name__ == "__main__":
+    unittest.main()

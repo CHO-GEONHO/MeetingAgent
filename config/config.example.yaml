@@ -1,0 +1,44 @@
+# MeetingAgent 설정. `meet setup`이 이 파일을 config.yaml로 복사해서 채워줍니다.
+# config.yaml은 .gitignore 대상이라 사내 정보가 커밋되지 않습니다.
+
+language: ko
+
+paths:
+  inbox: ~/MeetingInbox          # 여기에 녹음 파일을 넣으면 `meet watch on` 상태에서 자동 처리
+  workdir: ~/MeetingAgent-data   # 회의별 작업 폴더(전사본, 회의록, 로그)
+
+recording:
+  device: ":default"             # ffmpeg avfoundation 입력. 목록: `meet rec --list-devices`
+
+whisper:
+  model: mlx-community/whisper-large-v3-turbo
+  # true면 긴 회의에서 같은 문장 반복(루프) 위험이 커집니다
+  condition_on_previous_text: false
+
+diarization:
+  enabled: false                 # 화자 분리. `./install.sh --with-diarization` + HF 토큰 필요
+  model: pyannote/speaker-diarization-community-1
+  device: mps                    # mps | cpu (mps 오류 시 cpu로 자동 폴백)
+  # num_speakers: 4              # 참석자 수를 알면 지정하면 정확도가 올라갑니다
+
+summarize:
+  model: sonnet                  # claude CLI 모델 alias (sonnet | opus ...)
+  timeout_sec: 900
+  # claude_bin: /opt/homebrew/bin/claude   # launchd에서 못 찾을 때만 지정
+
+confluence:
+  enabled: true
+  base_url: https://confluence.example.com   # Data Center 주소 (VPN)
+  space_key: SPACE
+  parent_title: 회의록           # 상위 페이지. 없으면 `meet confluence-init`으로 생성
+  hierarchy: year_month          # none | year | year_month  (회의록 2026 / 회의록 2026-10 하위에 생성)
+  labels: [meeting]              # 모든 회의록에 붙는 공통 라벨
+  attach_transcript: true        # 페이지 하단에 원문 전사본(Expand) 첨부
+  verify_ssl: true               # 사내 CA면 CA 번들 경로를 넣어도 됩니다 (예: /path/to/ca.pem)
+
+retention:
+  # 원본 음성 삭제 시점: after_upload | after_transcribe | never
+  delete_audio: after_upload
+
+notify: true                     # 완료/실패 시 macOS 알림
+open_page_after_upload: false    # 업로드 후 브라우저로 페이지 열기

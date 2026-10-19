@@ -1,0 +1,22 @@
+# 사내 용어집. 두 군데에 쓰입니다.
+#  1) Whisper initial_prompt: 인식 단계에서 정식 표기로 유도
+#  2) Claude 회의록 skill: 전사 오류(variants)를 정식 표기(term)로 보정
+# variants에는 실제로 잘못 전사된 형태를 발견할 때마다 추가하세요.
+
+terms:
+  - term: AKS
+    variants: [에이케이에스, 에이 케이 에스, AKs]
+  - term: GKE
+    variants: [지케이이, 지 케이 이]
+  - term: FluxCD
+    variants: [플럭스 시디, 플럭스CD, 플럭스 cd]
+  - term: ArgoCD
+    variants: [아르고 시디, 아르고CD]
+  - term: Kubernetes
+    variants: [쿠버네티스, 쿠버]
+  - term: SBOM
+    variants: [에스봄, 에스 봄, 에스비오엠]
+  - term: PCI-DSS
+    variants: [피씨아이 디에스에스, PCI DSS]
+  - term: Terraform
+    variants: [테라폼]

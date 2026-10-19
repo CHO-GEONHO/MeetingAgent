@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# meet 진입점. ~/.local/bin/meet 심볼릭 링크로 어디서든 실행.
+set -euo pipefail
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  DIR="$(cd -P "$(dirname "$SRC")" && pwd)"
+  SRC="$(readlink "$SRC")"
+  [[ "$SRC" != /* ]] && SRC="$DIR/$SRC"
+done
+REPO="$(cd -P "$(dirname "$SRC")/.." && pwd)"
+PY="$REPO/.venv/bin/python"
+if [ ! -x "$PY" ]; then
+  echo "가상환경이 없습니다. 먼저 실행: $REPO/install.sh" >&2
+  exit 1
+fi
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" exec "$PY" -m meetingagent "$@"

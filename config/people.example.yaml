@@ -1,0 +1,13 @@
+# 팀원 목록.
+#  - name: 회의록에 표기할 정식 이름 (Whisper 프롬프트에도 들어갑니다)
+#  - aliases: 회의 중 부르는 호칭 (Claude가 담당자를 정식 이름으로 정규화)
+#  - username: Confluence 사용자명. 넣으면 Action Item/참석자에 @멘션이 걸리고
+#              Task Report에서 "내 할 일"로 모아볼 수 있습니다. (userkey는 자동 조회)
+
+people:
+  - name: 홍길동
+    aliases: [길동, 길동님, 홍 매니저]
+    username: gdhong
+  - name: 김철수
+    aliases: [철수님, 철수]
+    username: cskim
