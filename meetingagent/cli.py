@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ meet — 회의 녹음 → 로컬 전사 → Claude 회의록 → Confluence
 
   meet rec                     지금부터 녹음 (q 또는 Ctrl+C로 종료) → 자동 처리
   meet <파일.m4a> [...]        녹음 파일 처리
+  meet notes <작업>            수기 회의록을 붙이고 회의록을 다시 만든다
   meet watch on                ~/MeetingInbox 자동 감시 (파일만 넣으면 끝)
 
   meet list                    최근 회의록과 상태
@@ -42,6 +44,8 @@ def _add_hint_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--type", dest="meeting_type", help="정기회의|기술논의|장애회고|1on1|외부미팅")
     p.add_argument("-n", "--speakers", type=int, help="화자 수 (화자 분리 정확도 향상)")
     p.add_argument("--note", help="Claude에게 줄 추가 메모 (예: '보안 이슈 위주로')")
+    p.add_argument("--notes", metavar="파일",
+                   help="회의 중 직접 적은 수기 회의록 (.md/.txt). 전사본보다 우선합니다")
     p.add_argument("--date", help="회의 일시 덮어쓰기 'YYYY-MM-DD HH:MM'")
     p.add_argument("--no-upload", action="store_true", help="Confluence 업로드 생략 (로컬 md만)")
     p.add_argument("-y", "--yes", action="store_true", help="시작 질문 없이 바로 진행")
@@ -58,6 +62,54 @@ def _hints(args) -> dict:
         "speakers": args.speakers,
         "note": args.note,
     }
+
+
+NOTES_TEMPLATE = """\
+# 수기 회의록
+
+회의 중에 적은 것을 그대로 두세요. 문장이 아니어도 됩니다.
+Whisper 가 틀리는 숫자·제품명·대수는 여기 적힌 것을 따릅니다.
+전사본에 없는 내용(녹음이 못 잡았거나 끝나고 정리한 것)도 회의록에 들어갑니다.
+
+"""
+
+
+def _notes_path(job):
+    return job.f("notes.md")
+
+
+def _attach_notes(job, src: str | None) -> bool:
+    """`--notes <파일>` 을 작업 폴더의 notes.md 로 넣는다.
+
+    src 가 "-" 면 편집기를 열어 그 자리에서 작성하게 한다.
+    """
+    if not src:
+        return False
+    path = _notes_path(job)
+    if src == "-":
+        if not path.exists():
+            path.write_text(NOTES_TEMPLATE, encoding="utf-8")
+        _open_editor(path)
+        body = [l for l in path.read_text(encoding="utf-8").splitlines()
+                if l.strip() and not l.startswith("#") and "Whisper" not in l]
+        print(f"  수기 회의록 작성: {len(body)}줄" if body else "  수기 회의록 비어 있음 — 건너뜁니다")
+        return bool(body)
+    p = Path(src).expanduser()
+    if not p.exists():
+        print(f"수기 회의록 파일이 없습니다: {p}")
+        sys.exit(1)
+    text = p.read_text(encoding="utf-8")
+    _notes_path(job).write_text(text, encoding="utf-8")
+    print(f"  수기 회의록 반영: {p.name} ({len(text.splitlines())}줄)")
+    return True
+
+
+def _open_editor(path: Path) -> None:
+    """$EDITOR 로 열고 닫힐 때까지 기다린다. 없으면 맥 기본 편집기를 -W 로 띄운다."""
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    cmd = ([*editor.split(), str(path)] if editor
+           else ["open", "-W", "-t", str(path)])  # -W: 닫을 때까지 대기
+    subprocess.run(cmd)
 
 
 def _prompt_meeting_info(args) -> None:
@@ -111,6 +163,7 @@ def cmd_process(args) -> int:
             job = pipeline.create_job(src, cfg, move=args.move, hints=_hints(args),
                                       meeting_dt=_meeting_dt(args))
             pipeline.log(f"작업 폴더: {job.dir}")
+            _attach_notes(job, getattr(args, "notes", None))
             ok &= pipeline.run(job, cfg, upload=not args.no_upload)
     return 0 if ok else 1
 
@@ -129,6 +182,10 @@ def cmd_rec(args) -> int:
     print(f"● 녹음 중… 종료하려면 q 또는 Ctrl+C   ({dst})")
     audio.record(dst, args.device or cfg.get("recording.device"))
     print(f"\n녹음 저장: {dst}")
+    # 회의 중 적은 메모를 지금 붙인다. 전사가 끝난 뒤가 아니라 여기서 묻는 이유는,
+    # 이 뒤 단계(전사·요약)가 몇 분씩 걸려서 그때 물으면 자리를 비운 사이 멈춰 있기 때문이다.
+    if not args.notes and sys.stdin.isatty() and _yes("회의 중 적은 수기 회의록이 있나요?", False):
+        args.notes = _ask("파일 경로 (Enter 치면 편집기에서 바로 작성)") or "-"
     args.files, args.move = [str(dst)], True
     return cmd_process(args)
 
@@ -173,12 +230,30 @@ def cmd_retry(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_notes(args) -> int:
+    """수기 회의록을 붙이거나 고치고, 그 내용으로 회의록을 다시 만든다."""
+    cfg = _require_setup()
+    job = pipeline.find_job(cfg, args.job)
+    _attach_notes(job, args.file or "-")
+    if not _notes_path(job).exists():
+        return 1
+    print(f"  저장: {_notes_path(job)}")
+    if not args.no_redo and _yes("이 메모를 반영해 회의록을 다시 만들까요?"):
+        args.from_stage, args.title, args.note = "summarize", None, None
+        args.attendees = args.location = args.started_at = None
+        args.force = False
+        return cmd_redo(args)
+    print(f"  나중에 반영하려면: meet redo {job.name} --from summarize")
+    return 0
+
+
 def cmd_redo(args) -> int:
     cfg = _require_setup()
     job = pipeline.find_job(cfg, args.job)
     if args.from_stage in ("transcribe", "convert") and not (job.source and job.source.exists()):
         print("원본 음성이 이미 삭제되어 재전사할 수 없습니다. --from summarize 는 가능합니다.")
         return 1
+    _attach_notes(job, getattr(args, "notes", None))
     for key in ("title", "note", "location", "started_at"):
         val = getattr(args, key, None)
         if val:
@@ -411,7 +486,7 @@ def cmd_doctor(args) -> int:
     return 0 if ok else 1
 
 
-COMMANDS = {"rec", "list", "ls", "open", "retry", "redo", "watch", "setup", "doctor",
+COMMANDS = {"rec", "list", "ls", "open", "retry", "redo", "notes", "watch", "setup", "doctor",
             "confluence-init", "process", "help"}
 
 
@@ -450,6 +525,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("retry").set_defaults(func=cmd_retry)
 
+    p = sub.add_parser("notes")
+    p.add_argument("job")
+    p.add_argument("-f", "--file", help="붙일 파일 (없으면 편집기에서 작성)")
+    p.add_argument("--no-redo", action="store_true", help="회의록 재생성 없이 저장만")
+    p.set_defaults(func=cmd_notes)
+
     p = sub.add_parser("redo")
     p.add_argument("job")
     p.add_argument("--from", dest="from_stage", default="summarize",
@@ -459,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-l", "--location", help="회의 장소")
     p.add_argument("--time", dest="started_at", help="회의 시작 시각 (예: 14:00)")
     p.add_argument("--note")
+    p.add_argument("--notes", metavar="파일", help="수기 회의록 파일을 붙이고 다시 생성")
     p.add_argument("--force", action="store_true",
                    help="업로드 이후 사람이 고친 Confluence 페이지도 덮어쓴다")
     p.set_defaults(func=cmd_redo)

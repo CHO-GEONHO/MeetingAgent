@@ -63,6 +63,36 @@ meet 회의.m4a --no-upload        # 로컬 minutes.md만
 > `~/MeetingInbox` 자동 감시로 처리될 때는 **묻지 않습니다**(백그라운드라 물으면 멈춰요).
 > 장소·시각이 필요하면 나중에 `meet redo <작업> --from summarize -l "..." ` 로 다시 만들면 됩니다.
 
+## 수기 회의록을 같이 반영하기
+
+회의 중에 직접 적은 메모가 있으면 **그걸 전사본보다 우선**해서 회의록을 만듭니다.
+Whisper는 숫자와 고유명사를 자주 틀리는데(`64EA`→"육십사이에이", `22대`, 제품명),
+사람이 적은 메모에는 그런 왜곡이 없기 때문이에요.
+
+```bash
+meet rec --notes ~/notes.md       # 파일로 미리 주기
+meet 회의.m4a --notes ~/notes.md
+```
+
+`meet rec` 는 녹음이 끝나면 물어봅니다. Enter를 치면 편집기가 열려 그 자리에서 쓸 수 있어요.
+```
+회의 중 적은 수기 회의록이 있나요? [y/N]: y
+  파일 경로 (Enter 치면 편집기에서 바로 작성):
+```
+
+이미 만들어진 회의록에 나중에 붙일 수도 있어요. **같은 Confluence 페이지가 갱신**됩니다.
+```bash
+meet notes 2026-10-19             # 편집기로 작성/수정 → 회의록 재생성 여부를 물음
+meet notes 2026-10-19 -f ~/notes.md
+meet redo 2026-10-19 --from summarize --notes ~/notes.md
+```
+
+메모는 문장이 아니어도 됩니다. 적힌 대로 두면 Claude가 전사본 맥락과 합쳐 정리해요.
+
+- 메모와 전사본이 어긋나면 **메모를 따릅니다** (숫자·제품명·날짜)
+- **메모에만 있는 내용도 들어갑니다** — 녹음이 못 잡았거나 끝나고 적은 것
+- 메모의 우선순위·데드라인은 결정사항이나 Action Item으로 올라갑니다
+
 ### 관리
 ```bash
 meet list                         # 최근 회의와 상태 (✅ 완료 📝 업로드 대기 ❌ 실패)
@@ -166,7 +196,7 @@ meet setup                   # HF 토큰 입력 (모델 페이지에서 약관 �
 
 ```
 ~/MeetingAgent-data/meetings/2026-10-19_1430_주간-인프라-회의/
-  transcript.txt   transcript.json   minutes.json   minutes.md   page.xml   state.json   (error.log)
+  transcript.txt   transcript.json   notes.md   minutes.json   minutes.md   page.xml   state.json   (error.log)
 ```
 
 ## 문제 해결

@@ -90,6 +90,26 @@ class TestSummarize(unittest.TestCase):
         self.assertIn("참석자 힌트: a, b", text)
         self.assertIn("AKS ← 에이케이에스", text)
 
+    def test_build_input_puts_notes_before_transcript(self):
+        """수기 메모가 전사본보다 앞에 오고 우선한다고 적혀야 한다.
+
+        Whisper 는 숫자·고유명사를 틀린다(64EA, 22대). 사람이 적은 메모가 그 교정본이라,
+        순서와 문구가 바뀌면 모델이 전사본을 더 믿게 된다.
+        """
+        text = summarize.build_input(
+            meeting_date=date(2026, 10, 19), duration_sec=None, hints={},
+            glossary=[], people=[], transcript="[00:00:00] 육십사이에이",
+            notes="노보가라 64EA 스캐너를 미리 오픈한다")
+        self.assertLess(text.index("# 수기 회의록"), text.index("# 전사본"))
+        self.assertIn("전사본보다 우선한다", text)
+        self.assertIn("64EA", text)
+
+    def test_build_input_without_notes_has_no_notes_section(self):
+        text = summarize.build_input(
+            meeting_date=date(2026, 10, 19), duration_sec=None, hints={},
+            glossary=[], people=[], transcript="hi", notes="   \n  ")
+        self.assertNotIn("수기 회의록", text)
+
 
 class TestRender(unittest.TestCase):
     def test_storage_mentions_escaping_and_dates(self):

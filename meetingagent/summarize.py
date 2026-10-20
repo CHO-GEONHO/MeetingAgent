@@ -96,7 +96,13 @@ def load_skill_prompt() -> str:
 
 
 def build_input(*, meeting_date: date, duration_sec: float | None, hints: dict,
-                glossary: list[dict], people: list[dict], transcript: str) -> str:
+                glossary: list[dict], people: list[dict], transcript: str,
+                notes: str = "") -> str:
+    """Claude 에게 줄 입력. 수기 메모가 있으면 **전사본보다 먼저** 놓는다.
+
+    전사본은 Whisper 가 만든 것이라 고유명사·수치가 틀어진다(`64EA`, `22대`, 제품명).
+    사람이 회의 중에 적은 메모는 그 틀어짐이 없으므로, 둘이 어긋나면 메모를 따른다.
+    """
     parts = ["# 회의 메타데이터",
              f"- 회의 날짜: {meeting_date.isoformat()} ({WEEKDAYS[meeting_date.weekday()]})"]
     if duration_sec:
@@ -120,6 +126,10 @@ def build_input(*, meeting_date: date, duration_sec: float | None, hints: dict,
         for p in people:
             aliases = ", ".join(p.get("aliases") or [])
             parts.append(f"- {p['name']}" + (f" ← {aliases}" if aliases else ""))
+
+    if notes.strip():
+        parts.append("\n# 수기 회의록 (사람이 회의 중에 직접 적은 것 — 전사본보다 우선한다)\n")
+        parts.append(notes.strip())
 
     parts.append("\n# 전사본\n")
     parts.append(transcript)

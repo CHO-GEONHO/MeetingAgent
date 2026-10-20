@@ -5,6 +5,7 @@
   audio.wav         16k mono (전사 후 삭제)
   transcript.json   세그먼트 [{start,end,text,speaker}]
   transcript.txt    사람이 읽는 전사본
+  notes.md          회의 중 직접 적은 수기 회의록 (있으면 전사본보다 우선)
   minutes.json      Claude 결과 (구조화)
   minutes.md        로컬 사본
   page.xml          업로드한 Confluence storage format
@@ -225,11 +226,13 @@ def _write_transcript_txt(job: Job) -> str:
 def _stage_summarize(job: Job, cfg: Settings, transcript_text: str) -> dict:
     if job.done("summarize") and job.f("minutes.json").exists():
         return summarize.normalize(json.loads(job.f("minutes.json").read_text()))
-    log(f"회의록 작성 중 (claude -p, {cfg.get('summarize.model')})")
+    notes = job.f("notes.md").read_text(encoding="utf-8") if job.f("notes.md").exists() else ""
+    log(f"회의록 작성 중 (claude -p, {cfg.get('summarize.model')})"
+        + (f" · 수기 메모 {len(notes.splitlines())}줄 반영" if notes.strip() else ""))
     payload = summarize.build_input(
         meeting_date=job.meeting_date, duration_sec=job.state.get("duration_sec"),
         hints=job.state.get("hints", {}), glossary=cfg.glossary, people=cfg.people,
-        transcript=transcript_text,
+        transcript=transcript_text, notes=notes,
     )
     minutes = summarize.summarize(payload, model=cfg.get("summarize.model"),
                                   timeout=int(cfg.get("summarize.timeout_sec")),
