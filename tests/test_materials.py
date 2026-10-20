@@ -104,6 +104,7 @@ class TestPrompt(unittest.TestCase):
         prompt = summarize.load_skill_prompt()
         self.assertIn("회의 자료가 함께 오면", prompt)
         self.assertIn("'논의할 거리'이지 '논의된 것'이 아니다", prompt)
+        self.assertIn("IP 주소·API 키·토큰·계정 같은 개별 값은 회의록에 옮기지 않는다", prompt)
 
 
 class TestRenderMaterials(unittest.TestCase):
