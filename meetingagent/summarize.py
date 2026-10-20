@@ -95,13 +95,19 @@ def load_skill_prompt() -> str:
     return text.split("## 대화형으로 이 skill을 쓸 때", 1)[0].rstrip(" \n-") + "\n"
 
 
+MATERIAL_MAX_CHARS = 40_000  # 자료 하나당. 긴 보고서가 전사본·메모를 묻지 않게 자른다
+
+
 def build_input(*, meeting_date: date, duration_sec: float | None, hints: dict,
                 glossary: list[dict], people: list[dict], transcript: str,
-                notes: str = "") -> str:
+                notes: str = "", materials: list[tuple[str, str]] = ()) -> str:
     """Claude 에게 줄 입력. 수기 메모가 있으면 **전사본보다 먼저** 놓는다.
 
     전사본은 Whisper 가 만든 것이라 고유명사·수치가 틀어진다(`64EA`, `22대`, 제품명).
     사람이 회의 중에 적은 메모는 그 틀어짐이 없으므로, 둘이 어긋나면 메모를 따른다.
+
+    회의 자료(화면에 띄운 문서)는 메모와 전사본 사이에 **참고용**으로 둔다. 자료는 논의할 거리일 뿐
+    논의된 것이 아니라서, 자료만 보고 결정사항을 만들면 안 된다 (SKILL.md "회의 자료가 함께 오면").
     """
     parts = ["# 회의 메타데이터",
              f"- 회의 날짜: {meeting_date.isoformat()} ({WEEKDAYS[meeting_date.weekday()]})"]
@@ -130,6 +136,15 @@ def build_input(*, meeting_date: date, duration_sec: float | None, hints: dict,
     if notes.strip():
         parts.append("\n# 수기 회의록 (사람이 회의 중에 직접 적은 것 — 전사본보다 우선한다)\n")
         parts.append(notes.strip())
+
+    docs = [(name, text.strip()) for name, text in materials if text.strip()]
+    if docs:
+        parts.append("\n# 회의 자료 (회의 중 화면에 띄운 문서 — 참고용, 논의·결정의 근거가 아니다)")
+        for i, (name, text) in enumerate(docs, 1):
+            if len(text) > MATERIAL_MAX_CHARS:
+                text = text[:MATERIAL_MAX_CHARS] + f"\n…(이하 {len(text) - MATERIAL_MAX_CHARS}자 생략)"
+            parts.append(f"\n## 자료 {i}: {name}\n")
+            parts.append(text)
 
     parts.append("\n# 전사본\n")
     parts.append(transcript)

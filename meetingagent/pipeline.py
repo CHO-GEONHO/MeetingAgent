@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
-from . import audio, keychain, render, summarize, transcribe
+from . import audio, keychain, materials, render, summarize, transcribe
 from .config import Settings
 from .confluence import ConfluenceConflict
 
@@ -227,12 +227,14 @@ def _stage_summarize(job: Job, cfg: Settings, transcript_text: str) -> dict:
     if job.done("summarize") and job.f("minutes.json").exists():
         return summarize.normalize(json.loads(job.f("minutes.json").read_text()))
     notes = job.f("notes.md").read_text(encoding="utf-8") if job.f("notes.md").exists() else ""
+    docs = materials.load(job.dir)
     log(f"회의록 작성 중 (claude -p, {cfg.get('summarize.model')})"
-        + (f" · 수기 메모 {len(notes.splitlines())}줄 반영" if notes.strip() else ""))
+        + (f" · 수기 메모 {len(notes.splitlines())}줄 반영" if notes.strip() else "")
+        + (f" · 회의 자료 {len(docs)}개 참고" if docs else ""))
     payload = summarize.build_input(
         meeting_date=job.meeting_date, duration_sec=job.state.get("duration_sec"),
         hints=job.state.get("hints", {}), glossary=cfg.glossary, people=cfg.people,
-        transcript=transcript_text, notes=notes,
+        transcript=transcript_text, notes=notes, materials=docs,
     )
     minutes = summarize.summarize(payload, model=cfg.get("summarize.model"),
                                   timeout=int(cfg.get("summarize.timeout_sec")),
@@ -242,7 +244,8 @@ def _stage_summarize(job: Job, cfg: Settings, transcript_text: str) -> dict:
     summarize.save(minutes, job.f("minutes.json"))
     job.f("minutes.md").write_text(
         render.markdown(minutes, meeting_date=job.meeting_date,
-                        duration_sec=job.state.get("duration_sec")), encoding="utf-8")
+                        duration_sec=job.state.get("duration_sec"),
+                        materials=[name for name, _ in docs]), encoding="utf-8")
     job.state["title"] = minutes["title"]
     job.mark("summarize")
     log(f"회의록 완료: \"{minutes['title']}\" (결정 {len(minutes['decisions'])}, "
@@ -293,6 +296,7 @@ def _stage_upload(job: Job, cfg: Settings, minutes: dict, transcript_text: str, 
         minutes, meeting_date=job.meeting_date, duration_sec=job.state.get("duration_sec"),
         transcript_lines=transcript_text.splitlines() if cfg.get("confluence.attach_transcript") else None,
         source_name=job.state.get("source_name", ""),
+        materials=[name for name, _ in materials.load(job.dir)],
     )
     job.f("page.xml").write_text(body, encoding="utf-8")
 

@@ -45,7 +45,8 @@ class Renderer:
         return _e(p["name"] if p else name)
 
     def storage(self, m: dict, *, meeting_date: date, duration_sec: float | None,
-                transcript_lines: list[str] | None, source_name: str = "") -> str:
+                transcript_lines: list[str] | None, source_name: str = "",
+                materials: list[str] = ()) -> str:
         """사내 회의록 템플릿(wiki pageId=329155833) 골격으로 만든다.
 
         번호가 붙은 절 구성이고, 내용이 없는 절은 넣지 않는다.
@@ -161,6 +162,8 @@ class Renderer:
             footer.append("화자 추정: " + ", ".join(f"{k}={v}" for k, v in m["speaker_map"].items()))
         if m["corrections"]:
             footer.append("전사 보정: " + ", ".join(f"{c['from']}→{c['to']}" for c in m["corrections"]))
+        if materials:
+            footer.append("참고 자료: " + ", ".join(materials))
         footer.append("MeetingAgent 자동 생성 (로컬 Whisper 전사 + Claude 요약). 오류는 직접 수정해 주세요.")
         out.append("<hr />" + "".join(
             f'<p><span style="color: #6b778c;"><small>{_e(f)}</small></span></p>' for f in footer))
@@ -178,7 +181,8 @@ class Renderer:
         return "<ul>" + "".join(f"<li>{_e(i)}</li>" for i in items) + "</ul>"
 
 
-def markdown(m: dict, *, meeting_date: date, duration_sec: float | None) -> str:
+def markdown(m: dict, *, meeting_date: date, duration_sec: float | None,
+             materials: list[str] = ()) -> str:
     """storage() 와 같은 절 구성의 로컬 사본. 번호도 같게 매긴다."""
     lines = [f"# [{meeting_date.isoformat()}] {m['title']}", ""]
     n = 0
@@ -249,6 +253,8 @@ def markdown(m: dict, *, meeting_date: date, duration_sec: float | None) -> str:
                 lines += [f"### {n}.{i} {note['topic']}", ""]
             lines += [f"- {p}" for p in note["points"]] + [""]
 
+    if materials:
+        lines += ["참고 자료: " + ", ".join(materials), ""]
     if m["labels"]:
         lines += ["라벨: " + " ".join(f"`{l}`" for l in m["labels"])]
     return "\n".join(lines).rstrip() + "\n"
