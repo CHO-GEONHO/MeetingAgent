@@ -105,6 +105,14 @@ class TestPrompt(unittest.TestCase):
         self.assertIn("회의 자료가 함께 오면", prompt)
         self.assertIn("'논의할 거리'이지 '논의된 것'이 아니다", prompt)
         self.assertIn("IP 주소·API 키·토큰·계정 같은 개별 값은 회의록에 옮기지 않는다", prompt)
+        # 자료에서만 온 항목은 버리지 않고 구분 표시, 결정사항에는 넣지 않음
+        self.assertIn("`(자료 기준)`으로 구분한다", prompt)
+        self.assertIn("결정사항(decisions)에는 넣지 않는다", prompt)
+
+    def test_skill_forbids_owner_by_team(self):
+        """화자 분리 없는 전사본에서 '개발팀 참석자가 한 명'이라는 이유로 담당자를 몰아준 일이 있었다."""
+        prompt = summarize.load_skill_prompt()
+        self.assertIn("참석자의 소속 팀이나 직책만 보고 담당자를 정하지 않는다", prompt)
 
 
 class TestRenderMaterials(unittest.TestCase):
