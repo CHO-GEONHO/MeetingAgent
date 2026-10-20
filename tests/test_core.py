@@ -205,7 +205,9 @@ class TestTemplateLayout(unittest.TestCase):
     def test_decision_status_shown(self):
         m = minutes(decisions=[{"text": "범위 전환", "status": "확정 대기"}])
         _, xml = self._headings(m)
-        self.assertIn("[확정 대기]", xml)
+        # 템플릿처럼 색 라벨(status 매크로)로: 확정 대기 = 노랑
+        self.assertIn('<ac:parameter ac:name="colour">Yellow</ac:parameter>'
+                      '<ac:parameter ac:name="title">확정 대기</ac:parameter>', xml)
 
     def test_markdown_mirrors_storage_sections(self):
         m = minutes(location="본사 9층", started_at="14:00")

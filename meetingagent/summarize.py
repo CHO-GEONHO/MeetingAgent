@@ -18,6 +18,36 @@ from .config import SKILL_PATH
 _STR = {"type": "string"}
 _STR_LIST = {"type": "array", "items": _STR}
 
+# 안건·검토 의견의 본문 블록. 사내 템플릿(wiki pageId=329155833)처럼 소제목·표·강조 박스로
+# 나눠 쓰게 한다. Claude 는 내용만 채우고, 표·색 라벨·박스 XML 은 render.py 가 만든다.
+_TABLE = {
+    "type": "object",
+    "properties": {
+        "columns": _STR_LIST,
+        "rows": {"type": "array", "items": _STR_LIST},
+        # 이 이름의 열은 색 라벨(status 매크로)로 그린다. 없으면 "".
+        "status_column": _STR,
+    },
+    "required": ["columns", "rows", "status_column"],
+}
+_CALLOUT = {
+    "type": "object",
+    "properties": {"type": {"type": "string", "enum": ["info", "note", "warning", "tip"]},
+                   "title": _STR, "text": _STR},
+    "required": ["type", "title", "text"],
+}
+_SECTION = {
+    "type": "object",
+    "properties": {"heading": _STR, "points": _STR_LIST, "table": _TABLE, "callout": _CALLOUT},
+    "required": ["heading", "points"],
+}
+_BLOCK = {
+    "type": "object",
+    "properties": {"topic": _STR, "conclusion": _STR, "status": _STR,
+                   "sections": {"type": "array", "items": _SECTION}},
+    "required": ["topic", "conclusion", "status", "sections"],
+}
+
 MINUTES_SCHEMA = {
     "type": "object",
     "properties": {
@@ -46,12 +76,7 @@ MINUTES_SCHEMA = {
                       "properties": {"text": _STR, "status": _STR},
                       "required": ["text", "status"]},
         },
-        "review_notes": {
-            "type": "array",
-            "items": {"type": "object",
-                      "properties": {"topic": _STR, "points": _STR_LIST},
-                      "required": ["topic", "points"]},
-        },
+        "review_notes": {"type": "array", "items": _BLOCK},
         "action_items": {
             "type": "array",
             "items": {
@@ -60,14 +85,7 @@ MINUTES_SCHEMA = {
                 "required": ["owner", "task", "due", "evidence"],
             },
         },
-        "discussion": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"topic": _STR, "points": _STR_LIST},
-                "required": ["topic", "points"],
-            },
-        },
+        "discussion": {"type": "array", "items": _BLOCK},
         "open_questions": _STR_LIST,
         "speaker_map": {"type": "object", "additionalProperties": _STR},
         "corrections": {
@@ -182,6 +200,56 @@ def parse_claude_output(stdout: str) -> dict:
     return normalize(data)
 
 
+def _strs(items) -> list[str]:
+    return [str(x).strip() for x in items or [] if str(x).strip()]
+
+
+def normalize_table(t) -> dict | None:
+    """열 이름이 있고 행이 하나 이상일 때만 표. 행 길이는 열 수에 맞춘다."""
+    if not isinstance(t, dict):
+        return None
+    cols = _strs(t.get("columns"))
+    if not cols:
+        return None
+    rows = []
+    for r in t.get("rows") or []:
+        cells = [str(c).strip() for c in (r if isinstance(r, list) else [r])][: len(cols)]
+        cells += [""] * (len(cols) - len(cells))
+        if any(cells):
+            rows.append(cells)
+    if not rows:
+        return None
+    status = str(t.get("status_column") or "").strip()
+    return {"columns": cols, "rows": rows, "status_column": status if status in cols else ""}
+
+
+def normalize_callout(c) -> dict | None:
+    if not isinstance(c, dict) or not str(c.get("text") or "").strip():
+        return None
+    kind = c.get("type") if c.get("type") in ("info", "note", "warning", "tip") else "note"
+    return {"type": kind, "title": str(c.get("title") or "").strip(), "text": str(c["text"]).strip()}
+
+
+def normalize_block(d: dict) -> dict:
+    """안건·검토 의견 한 덩어리. 예전 형식 `{topic, points}` 도 받아 sections 로 바꾼다."""
+    sections = []
+    legacy = _strs(d.get("points"))
+    if legacy:
+        sections.append({"heading": "", "points": legacy, "table": None, "callout": None})
+    for sec in d.get("sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        item = {"heading": str(sec.get("heading") or "").strip(), "points": _strs(sec.get("points")),
+                "table": normalize_table(sec.get("table")),
+                "callout": normalize_callout(sec.get("callout"))}
+        if item["points"] or item["table"] or item["callout"]:
+            sections.append(item)
+    return {"topic": str(d.get("topic") or "").strip(),
+            "conclusion": str(d.get("conclusion") or "").strip(),
+            "status": str(d.get("status") or "").strip(),
+            "sections": sections}
+
+
 def normalize(data: dict) -> dict:
     """빠진 필드를 채우고 타입을 맞춘다. 업로드 단계가 항상 같은 모양을 받도록."""
     out = {
@@ -219,17 +287,17 @@ def normalize(data: dict) -> dict:
         if text:
             out["decisions"].append({"text": text, "status": status or "합의"})
     for n in data.get("review_notes") or []:
-        points = [str(p).strip() for p in n.get("points") or [] if str(p).strip()]
-        if points:
-            out["review_notes"].append({"topic": str(n.get("topic") or "").strip(), "points": points})
+        block = normalize_block(n)
+        if block["sections"]:
+            out["review_notes"].append(block)
     for a in data.get("action_items") or []:
         if str(a.get("task") or "").strip():
             out["action_items"].append({k: str(a.get(k) or "").strip()
                                         for k in ("owner", "task", "due", "evidence")})
     for d in data.get("discussion") or []:
-        points = [str(p).strip() for p in d.get("points") or [] if str(p).strip()]
-        if d.get("topic") or points:
-            out["discussion"].append({"topic": str(d.get("topic") or "").strip(), "points": points})
+        block = normalize_block(d)
+        if block["topic"] or block["sections"]:
+            out["discussion"].append(block)
     for label in data.get("labels") or []:
         clean = "".join(ch for ch in str(label).lower().replace(" ", "-")
                         if ch.isascii() and (ch.isalnum() or ch in "-_"))

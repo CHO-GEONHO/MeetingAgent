@@ -23,7 +23,7 @@ diarization:
 
 summarize:
   model: sonnet                  # claude CLI 모델 alias (sonnet | opus ...)
-  timeout_sec: 900
+  timeout_sec: 1800             # 자세한 회의록은 생성이 10분 넘게 걸릴 수 있다
   # claude_bin: /opt/homebrew/bin/claude   # launchd에서 못 찾을 때만 지정
 
 confluence:

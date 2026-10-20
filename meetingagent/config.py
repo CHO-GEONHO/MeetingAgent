@@ -26,7 +26,7 @@ DEFAULTS: dict[str, Any] = {
         "device": "mps",
         "num_speakers": None,
     },
-    "summarize": {"model": "sonnet", "timeout_sec": 900, "claude_bin": None},
+    "summarize": {"model": "sonnet", "timeout_sec": 1800, "claude_bin": None},
     "confluence": {
         "enabled": False,
         "base_url": "",
